@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Prompt Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Firebase SDK Imports for Environment Compatibility -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.db = null;
+        window.auth = null;
+
+        const initializeFirebase = async () => {
+            if (typeof window.__firebase_config === 'undefined') return;
+
+            const firebaseConfig = JSON.parse(window.__firebase_config);
+            const app = initializeApp(firebaseConfig);
+            window.db = getFirestore(app);
+            window.auth = getAuth(app);
+
+            try {
+                if (typeof window.__initial_auth_token !== 'undefined' && window.__initial_auth_token) {
+                    await signInWithCustomToken(window.auth, window.__initial_auth_token);
+                } else {
+                    await signInAnonymously(window.auth);
+                }
+            } catch (error) {
+                console.error("Firebase Auth Error:", error);
+            }
+        };
+
+        initializeFirebase();
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7fafc;
+        }
+        .container-box {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .loader {
+            border-top-color: #3b82f6;
+            -webkit-animation: spin 1s linear infinite;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 sm:p-8 flex justify-center items-start">
+    <div class="w-full max-w-4xl bg-white p-6 sm:p-10 rounded-xl container-box my-8">
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">
+            AI Prompt Engineer
+        </h1>
+        <p class="text-center text-gray-500 mb-8">
+            Enter a simple idea, and the Gemini model will transform it into a highly descriptive, artistic prompt for image generation.
+        </p>
+
+        <!-- Input Area -->
+        <div class="mb-6">
+            <label for="plainText" class="block text-lg font-medium text-gray-700 mb-2">Your Simple Idea:</label>
+            <textarea id="plainText" rows="4" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150" placeholder="e.g., A robot playing guitar on Mars."></textarea>
+        </div>
+
+        <!-- Action Button -->
+        <div class="flex justify-center mb-10">
+            <button id="generateButton" onclick="generatePrompt()" class="w-full sm:w-auto px-8 py-3 bg-blue-600 text-white font-semibold rounded-full hover:bg-blue-700 transition duration-200 focus:outline-none focus:ring-4 focus:ring-blue-300 active:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed">
+                Generate Descriptive Prompt
+            </button>
+        </div>
+
+        <!-- Output Area -->
+        <div id="outputContainer" class="hidden">
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4 border-b pb-2">Generated Prompt:</h2>
+            <div id="loadingIndicator" class="hidden flex items-center justify-center p-8">
+                <div class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-12 w-12 mr-3"></div>
+                <span class="text-blue-600 font-medium">Drafting the masterpiece...</span>
+            </div>
+
+            <div id="promptOutput" class="p-4 bg-gray-50 border border-gray-200 rounded-lg whitespace-pre-wrap text-gray-700 text-base relative">
+                <!-- Prompt content will be inserted here -->
+            </div>
+
+            <div class="flex justify-end mt-4">
+                <button onclick="copyToClipboard('promptOutput')" class="flex items-center text-sm px-4 py-2 bg-green-500 text-white rounded-full hover:bg-green-600 transition duration-150">
+                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5h2m-2 0h2m-2 0V3m6 2v12m0 0V3m0 0h-2m2 0h-2m0 0a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1"></path></svg>
+                    Copy Prompt
+                </button>
+            </div>
+            
+            <div id="copySuccessMessage" class="hidden mt-2 text-sm text-green-600 text-right">
+                Copied to clipboard!
+            </div>
+            
+        </div>
+        
+        <!-- Error Message Box -->
+        <div id="errorMessage" class="hidden p-4 mt-6 bg-red-100 border border-red-400 text-red-700 rounded-lg" role="alert">
+            <p class="font-bold">Error:</p>
+            <p id="errorText"></p>
+        </div>
+
+    </div>
+
+    <script>
+        const API_KEY = "AIzaSyAy96uuB6woDXZpsZ79RIfGE5VuzjLXxhs"; // Leave as-is
+        const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${API_KEY}`;
+        
+        const plainText = document.getElementById('plainText');
+        const generateButton = document.getElementById('generateButton');
+        const promptOutput = document.getElementById('promptOutput');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const outputContainer = document.getElementById('outputContainer');
+        const errorMessage = document.getElementById('errorMessage');
+        const errorText = document.getElementById('errorText');
+        const copySuccessMessage = document.getElementById('copySuccessMessage');
+
+        // Function to handle fetching with exponential backoff for retries
+        const fetchWithRetry = async (url, options, maxRetries = 3) => {
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.ok) {
+                        return response;
+                    }
+                    if (response.status === 429 && i < maxRetries - 1) {
+                        const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        continue;
+                    }
+                    throw new Error(`API request failed with status: ${response.status}`);
+                } catch (error) {
+                    if (i === maxRetries - 1) throw error;
+                    const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        };
+
+        const systemPrompt = `You are a world-class AI Prompt Engineer. Your task is to take a simple, short description provided by the user and transform it into a highly detailed, descriptive, and creative prompt suitable for an image generation model (like Midjourney or Stable Diffusion). The generated prompt must be a single, continuous paragraph, including rich details about the subject, style, atmosphere, lighting, camera angle, and artistic medium (e.g., oil painting, 3D render, photorealistic). Do not include any conversational preamble, labels like 'Prompt:', or markdown formatting like quotes or bullet points. Start directly with the descriptive prompt.`;
+
+
+        async function generatePrompt() {
+            const input = plainText.value.trim();
+            errorMessage.classList.add('hidden');
+            copySuccessMessage.classList.add('hidden');
+
+            if (input === "") {
+                errorText.textContent = "Please enter a simple idea before generating the prompt.";
+                errorMessage.classList.remove('hidden');
+                return;
+            }
+
+            // Show loading and disable button
+            outputContainer.classList.remove('hidden');
+            promptOutput.textContent = '';
+            loadingIndicator.classList.remove('hidden');
+            generateButton.disabled = true;
+
+            const payload = {
+                contents: [{ parts: [{ text: input }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+
+            try {
+                const response = await fetchWithRetry(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const result = await response.json();
+                
+                const candidate = result.candidates?.[0];
+
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    const generatedText = candidate.content.parts[0].text;
+                    promptOutput.textContent = generatedText;
+                } else {
+                    throw new Error("Received an invalid response from the AI model.");
+                }
+
+            } catch (error) {
+                console.error("API Error:", error);
+                errorText.textContent = `Failed to generate prompt. Please try again. Details: ${error.message}`;
+                errorMessage.classList.remove('hidden');
+                promptOutput.textContent = 'Could not generate prompt.';
+            } finally {
+                loadingIndicator.classList.add('hidden');
+                generateButton.disabled = false;
+            }
+        }
+
+        function copyToClipboard(elementId) {
+            const element = document.getElementById(elementId);
+            const textToCopy = element.textContent || element.innerText;
+            
+            // Use execCommand for broader compatibility within iframe environments
+            const textArea = document.createElement("textarea");
+            textArea.value = textToCopy;
+            textArea.style.position = "fixed";  // Avoid scrolling to bottom
+            textArea.style.left = "-9999px"; // Off-screen positioning
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    copySuccessMessage.classList.remove('hidden');
+                    setTimeout(() => copySuccessMessage.classList.add('hidden'), 2000);
+                } else {
+                    console.error("Copy command was unsuccessful.");
+                }
+            } catch (err) {
+                console.error('Oops, unable to copy', err);
+            }
+            
+            document.body.removeChild(textArea);
+        }
+    </script>
+</body>
+</html>
